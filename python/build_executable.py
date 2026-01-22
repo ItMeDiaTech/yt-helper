@@ -41,6 +41,8 @@ def build():
         '--hidden-import=werkzeug',
         '--hidden-import=engineio',
         '--hidden-import=socketio',
+        '--hidden-import=simple_websocket',
+        '--hidden-import=wsproto',
         # DNS and network imports for yt-dlp
         '--hidden-import=dns.rdtypes.*',
         '--hidden-import=dns.dnssecalgs.*',
