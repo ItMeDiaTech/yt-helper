@@ -1,6 +1,6 @@
 {
   "name": "yt-helper",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "YouTube video downloader with format, quality, and time range selection",
   "type": "module",
   "main": "./out/main/index.js",
@@ -11,7 +11,9 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-builder --win",
-    "package:dir": "electron-builder --win --dir"
+    "package:dir": "electron-builder --win --dir",
+    "download:ffmpeg": "node scripts/download-ffmpeg.mjs",
+    "prebuild:python": "node scripts/download-ffmpeg.mjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -25,6 +27,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "unzipper": "^0.12.3",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",

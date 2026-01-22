@@ -7,6 +7,9 @@ Flask server with WebSocket support for real-time download progress.
 import argparse
 import uuid
 import threading
+import sys
+import os
+import subprocess
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -14,7 +17,8 @@ from downloader import YouTubeDownloader
 
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Use threading mode for better compatibility with PyInstaller bundles
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 downloader = YouTubeDownloader()
 active_downloads = {}
@@ -150,13 +154,79 @@ def handle_disconnect():
     print('Client disconnected')
 
 
+def setup_ffmpeg_path():
+    """Set up ffmpeg path for bundled executable."""
+    if getattr(sys, 'frozen', False):
+        # Running as bundled executable
+        bundle_dir = os.path.dirname(sys.executable)
+        # Check multiple possible locations for ffmpeg
+        possible_paths = [
+            os.path.join(bundle_dir, 'ffmpeg'),  # Same level as exe
+            os.path.join(bundle_dir, '..', 'ffmpeg'),  # Parent directory
+            os.path.join(bundle_dir, '..', '..', 'ffmpeg'),  # resources/ffmpeg
+        ]
+
+        for ffmpeg_dir in possible_paths:
+            ffmpeg_exe = os.path.join(ffmpeg_dir, 'ffmpeg.exe')
+            if os.path.exists(ffmpeg_exe):
+                # Add to PATH
+                os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
+                print(f'FFmpeg found at: {ffmpeg_dir}')
+                return True
+
+        print('Warning: FFmpeg not found in expected locations')
+        return False
+    return True
+
+
+def print_diagnostics():
+    """Print startup diagnostics for debugging."""
+    print('=' * 50)
+    print('YouTube Helper Backend - Startup Diagnostics')
+    print('=' * 50)
+    print(f'Python version: {sys.version}')
+    print(f'Executable: {sys.executable}')
+    print(f'Working directory: {os.getcwd()}')
+    print(f'Frozen (bundled): {getattr(sys, "frozen", False)}')
+
+    # Check ffmpeg
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-version'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        ffmpeg_version = result.stdout.split('\n')[0] if result.returncode == 0 else 'Error'
+        print(f'FFmpeg: {ffmpeg_version}')
+    except FileNotFoundError:
+        print('FFmpeg: NOT FOUND (downloads may fail)')
+    except Exception as e:
+        print(f'FFmpeg: Error checking - {e}')
+
+    # Check yt-dlp
+    try:
+        import yt_dlp
+        print(f'yt-dlp version: {yt_dlp.version.__version__}')
+    except Exception as e:
+        print(f'yt-dlp: Error - {e}')
+
+    print('=' * 50)
+
+
 def main():
     parser = argparse.ArgumentParser(description='YouTube Helper Backend Server')
     parser.add_argument('--port', type=int, default=5000, help='Port to run the server on')
     args = parser.parse_args()
 
+    # Setup ffmpeg for bundled mode
+    setup_ffmpeg_path()
+
+    # Print diagnostics
+    print_diagnostics()
+
     print(f'Starting server on port {args.port}')
-    socketio.run(app, host='127.0.0.1', port=args.port, debug=False)
+    socketio.run(app, host='127.0.0.1', port=args.port, debug=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == '__main__':

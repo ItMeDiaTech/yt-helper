@@ -34,3 +34,10 @@ npm-debug.log*
 # Temp
 *.tmp
 *.temp
+temp-ffmpeg/
+
+# FFmpeg binaries (downloaded during build)
+python/ffmpeg/
+
+# Windows artifacts
+nul
