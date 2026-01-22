@@ -22,6 +22,7 @@ publish:
   releaseType: release
 win:
   executableName: yt-helper
+  icon: resources/icon.ico
   target:
     - target: nsis
       arch:

@@ -34,6 +34,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     backgroundColor: '#0f172a',
     title: 'YouTube Helper',
+    icon: join(__dirname, '../../resources/icon.png'),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
