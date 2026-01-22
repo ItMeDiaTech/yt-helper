@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+python/__pycache__/
+python/*.pyc
+python/.venv/
+python/venv/
+
+# Build output
+out/
+dist/
+python/dist/
+python/build/
+python/*.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temp
+*.tmp
+*.temp

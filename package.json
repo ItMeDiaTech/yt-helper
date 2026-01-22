@@ -1,0 +1,40 @@
+{
+  "name": "yt-helper",
+  "version": "1.0.0",
+  "description": "YouTube video downloader with format, quality, and time range selection",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "author": "DiaTech",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-builder --win",
+    "package:dir": "electron-builder --win --dir"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "electron-log": "^5.4.3",
+    "electron-store": "^10.0.0",
+    "electron-updater": "^6.7.3",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.7.0",
+    "vite": "^5.4.0"
+  }
+}
