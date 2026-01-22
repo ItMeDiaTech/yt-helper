@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 YouTube Helper Backend Server
-Flask server with WebSocket support for real-time download progress.
+Flask server with HTTP polling for download progress.
 """
 
 import argparse
@@ -12,22 +12,14 @@ import os
 import subprocess
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_socketio import SocketIO
 from downloader import YouTubeDownloader
 
 app = Flask(__name__)
 CORS(app)
-# Let Flask-SocketIO auto-detect async mode (uses Werkzeug in PyInstaller bundles)
-socketio = SocketIO(app, cors_allowed_origins="*")
 
 downloader = YouTubeDownloader()
 active_downloads = {}
-
-
-def emit_progress(download_id: str, data: dict):
-    """Emit progress update via WebSocket."""
-    data['downloadId'] = download_id
-    socketio.emit('progress', data, namespace='/ws/progress')
+download_progress = {}
 
 
 @app.route('/api/health', methods=['GET'])
@@ -71,19 +63,25 @@ def start_download():
 
     download_id = str(uuid.uuid4())
 
+    # Initialize progress tracking
+    download_progress[download_id] = {
+        'downloadId': download_id,
+        'status': 'downloading',
+        'progress': 0,
+        'speed': None,
+        'eta': None,
+        'filename': None,
+        'error': None
+    }
+
     def progress_callback(data):
-        emit_progress(download_id, data)
+        """Update progress in the shared dict."""
+        download_progress[download_id].update(data)
+        download_progress[download_id]['downloadId'] = download_id
 
     def download_thread():
         try:
             active_downloads[download_id] = {'status': 'downloading', 'cancel': False}
-
-            emit_progress(download_id, {
-                'status': 'downloading',
-                'progress': 0,
-                'speed': None,
-                'eta': None
-            })
 
             result = downloader.download(
                 url=url,
@@ -99,18 +97,18 @@ def start_download():
             )
 
             if active_downloads.get(download_id, {}).get('cancel'):
-                emit_progress(download_id, {
+                download_progress[download_id].update({
                     'status': 'cancelled',
                     'progress': 0
                 })
             else:
-                emit_progress(download_id, {
+                download_progress[download_id].update({
                     'status': 'complete',
                     'progress': 100,
                     'filename': result.get('filename')
                 })
         except Exception as e:
-            emit_progress(download_id, {
+            download_progress[download_id].update({
                 'status': 'error',
                 'progress': 0,
                 'error': str(e)
@@ -124,6 +122,20 @@ def start_download():
     thread.start()
 
     return jsonify({'downloadId': download_id})
+
+
+@app.route('/api/download/progress', methods=['GET'])
+def get_download_progress():
+    """Get progress for all active downloads."""
+    return jsonify(list(download_progress.values()))
+
+
+@app.route('/api/download/progress/<download_id>', methods=['GET'])
+def get_single_download_progress(download_id):
+    """Get progress for a specific download."""
+    if download_id in download_progress:
+        return jsonify(download_progress[download_id])
+    return jsonify({'error': 'Download not found'}), 404
 
 
 @app.route('/api/download/cancel', methods=['POST'])
@@ -142,16 +154,13 @@ def cancel_download():
     return jsonify({'error': 'Download not found'}), 404
 
 
-@socketio.on('connect', namespace='/ws/progress')
-def handle_connect():
-    """Handle WebSocket connection."""
-    print('Client connected')
-
-
-@socketio.on('disconnect', namespace='/ws/progress')
-def handle_disconnect():
-    """Handle WebSocket disconnection."""
-    print('Client disconnected')
+@app.route('/api/download/clear/<download_id>', methods=['DELETE'])
+def clear_download(download_id):
+    """Clear a completed download from progress tracking."""
+    if download_id in download_progress:
+        del download_progress[download_id]
+        return jsonify({'status': 'cleared'})
+    return jsonify({'error': 'Download not found'}), 404
 
 
 def setup_ffmpeg_path():
@@ -226,7 +235,8 @@ def main():
     print_diagnostics()
 
     print(f'Starting server on port {args.port}')
-    socketio.run(app, host='127.0.0.1', port=args.port, debug=False, allow_unsafe_werkzeug=True)
+    # Use plain Flask server - simple and reliable
+    app.run(host='127.0.0.1', port=args.port, debug=False, threaded=True)
 
 
 if __name__ == '__main__':

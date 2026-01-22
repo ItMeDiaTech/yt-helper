@@ -9,18 +9,20 @@ import { VideoInfo, DownloadOptions, DownloadProgress } from '../shared/types'
 
 // Minimum expected size for the bundled executable (in bytes)
 const MIN_EXE_SIZE = 10 * 1024 * 1024 // 10 MB
+const POLL_INTERVAL = 500 // Poll every 500ms
 
 export class PythonBridge extends EventEmitter {
   private process: ChildProcess | null = null
   private port: number = 0
   private ready: boolean = false
-  private ws: WebSocket | null = null
   private starting: boolean = false
   private shouldRestart: boolean = true
   private retryCount: number = 0
   private maxRetries: number = 3
   private lastError: string = ''
   private outputBuffer: string[] = []
+  private pollInterval: NodeJS.Timeout | null = null
+  private activeDownloads: Set<string> = new Set()
 
   async start(): Promise<void> {
     if (this.starting || this.ready) {
@@ -106,8 +108,7 @@ export class PythonBridge extends EventEmitter {
 
         this.ready = false
         this.starting = false
-        this.ws?.close()
-        this.ws = null
+        this.stopPolling()
 
         // Auto-restart with exponential backoff
         if (this.shouldRestart && code !== 0 && code !== null) {
@@ -136,7 +137,6 @@ export class PythonBridge extends EventEmitter {
       })
 
       await this.waitForServer()
-      this.connectWebSocket()
       this.ready = true
       this.starting = false
       this.retryCount = 0 // Reset retry count on success
@@ -164,10 +164,7 @@ export class PythonBridge extends EventEmitter {
     this.ready = false
     this.retryCount = 0
 
-    if (this.ws) {
-      this.ws.close()
-      this.ws = null
-    }
+    this.stopPolling()
 
     if (this.process) {
       // Try graceful shutdown first
@@ -199,6 +196,61 @@ export class PythonBridge extends EventEmitter {
 
   getOutputBuffer(): string[] {
     return [...this.outputBuffer]
+  }
+
+  private startPolling(): void {
+    if (this.pollInterval) return
+
+    this.pollInterval = setInterval(async () => {
+      if (!this.ready || this.activeDownloads.size === 0) return
+
+      try {
+        const response = await fetch(`http://127.0.0.1:${this.port}/api/download/progress`)
+        if (response.ok) {
+          const progressList = (await response.json()) as DownloadProgress[]
+
+          for (const progress of progressList) {
+            if (progress.status === 'complete') {
+              this.emit('complete', progress)
+              this.activeDownloads.delete(progress.downloadId)
+              // Clear from server
+              this.clearDownload(progress.downloadId).catch(() => {})
+            } else if (progress.status === 'error') {
+              this.emit('error', progress)
+              this.activeDownloads.delete(progress.downloadId)
+              this.clearDownload(progress.downloadId).catch(() => {})
+            } else if (progress.status === 'cancelled') {
+              this.activeDownloads.delete(progress.downloadId)
+              this.clearDownload(progress.downloadId).catch(() => {})
+            } else {
+              this.emit('progress', progress)
+            }
+          }
+        }
+      } catch (error) {
+        log.error('Error polling progress:', error)
+      }
+    }, POLL_INTERVAL)
+
+    log.info('Started progress polling')
+  }
+
+  private stopPolling(): void {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval)
+      this.pollInterval = null
+      log.info('Stopped progress polling')
+    }
+  }
+
+  private async clearDownload(downloadId: string): Promise<void> {
+    try {
+      await fetch(`http://127.0.0.1:${this.port}/api/download/clear/${downloadId}`, {
+        method: 'DELETE'
+      })
+    } catch {
+      // Ignore errors
+    }
   }
 
   private getPythonCommand(): { pythonPath: string; args: string[]; env: Record<string, string> } {
@@ -308,55 +360,6 @@ export class PythonBridge extends EventEmitter {
     throw new Error(`Python server failed to start after ${maxAttempts * intervalMs}ms`)
   }
 
-  private connectWebSocket(): void {
-    if (this.ws) {
-      this.ws.close()
-    }
-
-    const wsUrl = `ws://127.0.0.1:${this.port}/ws/progress`
-    log.info(`Connecting WebSocket to ${wsUrl}`)
-
-    this.ws = new WebSocket(wsUrl)
-
-    this.ws.onopen = () => {
-      log.info('WebSocket connected')
-    }
-
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as DownloadProgress
-        if (data.status === 'complete') {
-          this.emit('complete', data)
-        } else if (data.status === 'error') {
-          this.emit('error', data)
-        } else {
-          this.emit('progress', data)
-        }
-      } catch (error) {
-        log.error('Failed to parse WebSocket message:', error)
-      }
-    }
-
-    this.ws.onerror = (error) => {
-      log.error('WebSocket error:', error)
-    }
-
-    this.ws.onclose = (event) => {
-      log.info(`WebSocket closed: code=${event.code}, reason=${event.reason}`)
-      this.ws = null
-
-      // Reconnect if server is still supposed to be running
-      if (this.ready && this.shouldRestart) {
-        log.info('Reconnecting WebSocket in 2 seconds...')
-        setTimeout(() => {
-          if (this.ready) {
-            this.connectWebSocket()
-          }
-        }, 2000)
-      }
-    }
-  }
-
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     if (!this.ready) {
       throw new Error('Python server is not ready')
@@ -388,10 +391,16 @@ export class PythonBridge extends EventEmitter {
   }
 
   async startDownload(options: DownloadOptions): Promise<{ downloadId: string }> {
-    return this.request<{ downloadId: string }>('/api/download/start', {
+    const result = await this.request<{ downloadId: string }>('/api/download/start', {
       method: 'POST',
       body: JSON.stringify(options)
     })
+
+    // Track this download and start polling
+    this.activeDownloads.add(result.downloadId)
+    this.startPolling()
+
+    return result
   }
 
   async cancelDownload(downloadId: string): Promise<void> {
@@ -399,5 +408,6 @@ export class PythonBridge extends EventEmitter {
       method: 'POST',
       body: JSON.stringify({ downloadId })
     })
+    this.activeDownloads.delete(downloadId)
   }
 }
