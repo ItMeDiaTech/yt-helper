@@ -161,20 +161,20 @@ class YouTubeDownloader:
             ydl_opts['format'] = format_spec
             ydl_opts['merge_output_format'] = video_format
 
-        # Time range extraction
-        if start_time or end_time:
-            download_ranges = []
-
-            start_seconds = self._time_to_seconds(start_time) if start_time else 0
-            end_seconds = self._time_to_seconds(end_time) if end_time else float('inf')
-
-            ydl_opts['download_ranges'] = lambda info_dict, ydl: [
-                {'start_time': start_seconds, 'end_time': end_seconds if end_seconds != float('inf') else None}
-            ]
-            ydl_opts['force_keyframes_at_cuts'] = True
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+
+        # Trim if time range specified
+        if (start_time or end_time) and result.get('filename'):
+            try:
+                result['filename'] = self._trim_file(
+                    result['filename'],
+                    start_time,
+                    end_time,
+                    progress_callback
+                )
+            except Exception as e:
+                raise ValueError(f'Failed to trim video: {str(e)}')
 
         return result
 
@@ -192,3 +192,60 @@ class YouTubeDownloader:
             return m * 60 + s
         else:
             return float(parts[0])
+
+    def _trim_file(
+        self,
+        filepath: str,
+        start_time: Optional[str],
+        end_time: Optional[str],
+        progress_callback: Optional[Callable[[Dict], None]] = None
+    ) -> str:
+        """Trim media file using FFmpeg."""
+        import subprocess
+        import os
+
+        if not os.path.exists(filepath):
+            # Try to find the actual output file (yt-dlp may have changed extension)
+            base_path = os.path.splitext(filepath)[0]
+            for ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.ogg', '.wav', '.flac']:
+                candidate = base_path + ext
+                if os.path.exists(candidate):
+                    filepath = candidate
+                    break
+            else:
+                raise FileNotFoundError(f'Downloaded file not found: {filepath}')
+
+        if progress_callback:
+            progress_callback({
+                'status': 'processing',
+                'progress': 95,
+                'filename': filepath,
+                'message': 'Trimming to selected time range...'
+            })
+
+        # Build ffmpeg command
+        temp_output = filepath + '.trimmed.tmp'
+        cmd = ['ffmpeg', '-y', '-i', filepath]
+
+        if start_time:
+            cmd.extend(['-ss', start_time])
+        if end_time:
+            cmd.extend(['-to', end_time])
+
+        # Use copy mode for fast trimming (no re-encoding)
+        cmd.extend(['-c', 'copy', temp_output])
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+
+            # Replace original with trimmed
+            os.remove(filepath)
+            os.rename(temp_output, filepath)
+
+            return filepath
+        except subprocess.CalledProcessError as e:
+            # Clean up temp file if it exists
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            stderr = e.stderr.decode() if e.stderr else 'Unknown error'
+            raise RuntimeError(f'FFmpeg trimming failed: {stderr}')
