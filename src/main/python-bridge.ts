@@ -158,7 +158,7 @@ export class PythonBridge extends EventEmitter {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     log.info('Stopping Python bridge...')
     this.shouldRestart = false
     this.ready = false
@@ -166,20 +166,52 @@ export class PythonBridge extends EventEmitter {
 
     this.stopPolling()
 
-    if (this.process) {
+    // Cancel any active downloads via API
+    for (const downloadId of this.activeDownloads) {
+      try {
+        await fetch(`http://127.0.0.1:${this.port}/api/download/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ downloadId })
+        })
+      } catch {
+        // Ignore errors during shutdown
+      }
+    }
+    this.activeDownloads.clear()
+
+    if (!this.process) {
+      return
+    }
+
+    return new Promise<void>((resolve) => {
+      const proc = this.process!
+
+      // Resolve when process exits
+      proc.once('exit', () => {
+        log.info('Python process terminated')
+        this.process = null
+        resolve()
+      })
+
       // Try graceful shutdown first
-      this.process.kill('SIGTERM')
+      proc.kill('SIGTERM')
 
       // Force kill after timeout
       setTimeout(() => {
-        if (this.process && !this.process.killed) {
+        if (proc && !proc.killed) {
           log.warn('Force killing Python process')
-          this.process.kill('SIGKILL')
+          proc.kill('SIGKILL')
         }
       }, 3000)
 
-      this.process = null
-    }
+      // Also resolve after max timeout in case exit event doesn't fire
+      setTimeout(() => {
+        log.info('Shutdown timeout reached')
+        this.process = null
+        resolve()
+      }, 5000)
+    })
   }
 
   isReady(): boolean {

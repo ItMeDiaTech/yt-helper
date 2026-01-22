@@ -1,6 +1,6 @@
 {
   "name": "yt-helper",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "YouTube video downloader with format, quality, and time range selection",
   "type": "module",
   "main": "./out/main/index.js",

@@ -23,6 +23,7 @@ const store = new Store({
 let mainWindow: BrowserWindow | null = null
 let pythonBridge: PythonBridge | null = null
 let isQuitting = false
+let cleanupDone = false
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -194,15 +195,25 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('before-quit', () => {
-  isQuitting = true
-  log.info('Application quitting, stopping Python backend...')
-  pythonBridge?.stop()
+app.on('before-quit', async (event) => {
+  if (!cleanupDone && pythonBridge) {
+    event.preventDefault()
+    isQuitting = true
+    log.info('Application quitting, stopping Python backend...')
+    await pythonBridge.stop()
+    cleanupDone = true
+    log.info('Cleanup complete, quitting app')
+    app.quit()
+  }
 })
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
-    pythonBridge?.stop()
+    if (pythonBridge && !cleanupDone) {
+      log.info('All windows closed, stopping Python backend...')
+      await pythonBridge.stop()
+      cleanupDone = true
+    }
     app.quit()
   }
 })
