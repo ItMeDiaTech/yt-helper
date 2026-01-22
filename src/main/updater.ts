@@ -1,4 +1,7 @@
-import { autoUpdater, UpdateCheckResult, UpdateInfo, ProgressInfo } from 'electron-updater'
+import electronUpdater from 'electron-updater'
+import type { UpdateCheckResult, UpdateInfo, ProgressInfo } from 'electron-updater'
+
+const { autoUpdater } = electronUpdater
 import { BrowserWindow, ipcMain } from 'electron'
 import log from 'electron-log'
 
