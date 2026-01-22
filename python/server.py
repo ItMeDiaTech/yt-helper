@@ -17,8 +17,8 @@ from downloader import YouTubeDownloader
 
 app = Flask(__name__)
 CORS(app)
-# Use threading mode for better compatibility with PyInstaller bundles
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# Let Flask-SocketIO auto-detect async mode (uses Werkzeug in PyInstaller bundles)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 downloader = YouTubeDownloader()
 active_downloads = {}
