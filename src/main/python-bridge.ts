@@ -131,6 +131,9 @@ export class PythonBridge extends EventEmitter {
       this.process.on('exit', (code, signal) => {
         log.info(`Python process exited with code ${code}, signal ${signal}`)
 
+        const wasStarting = this.starting
+        const wasReady = this.ready
+
         // Log the last few lines of output for debugging
         if (code !== 0) {
           log.error('Process output before exit:')
@@ -142,7 +145,7 @@ export class PythonBridge extends EventEmitter {
         this.stopPolling()
         this.stopHeartbeat()
 
-        // Auto-restart with exponential backoff
+        // Auto-restart with exponential backoff for non-zero exits
         if (this.shouldRestart && code !== 0 && code !== null) {
           this.retryCount++
 
@@ -165,6 +168,13 @@ export class PythonBridge extends EventEmitter {
               error: `Backend failed to start after ${this.maxRetries} attempts. Last error: ${this.lastError || 'Unknown error'}`
             })
           }
+        } else if (wasStarting || wasReady) {
+          // Process exited with code 0 or was killed by signal while starting/running
+          // Emit status so the UI doesn't stay stuck on the loading screen
+          this.emit('status', {
+            ready: false,
+            error: `Backend process exited unexpectedly${signal ? ` (signal: ${signal})` : ''}. ${this.lastError || 'Please restart the application.'}`
+          })
         }
       })
 
@@ -195,6 +205,7 @@ export class PythonBridge extends EventEmitter {
     log.info('Stopping Python bridge...')
     this.shouldRestart = false
     this.ready = false
+    this.starting = false
     this.retryCount = 0
 
     this.stopPolling()
