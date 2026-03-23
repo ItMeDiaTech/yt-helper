@@ -51,7 +51,9 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    if (details.url.startsWith('https://') || details.url.startsWith('http://')) {
+      shell.openExternal(details.url)
+    }
     return { action: 'deny' }
   })
 
@@ -94,6 +96,10 @@ function setupIpcHandlers(): void {
   })
 
   ipcMain.handle(IPC_CHANNELS.SET_SETTINGS, (_, key: string, value: unknown) => {
+    const ALLOWED_KEYS = ['outputDirectory', 'defaultVideoFormat', 'defaultAudioFormat', 'defaultQuality']
+    if (!ALLOWED_KEYS.includes(key)) {
+      throw new Error(`Invalid settings key: ${key}`)
+    }
     store.set(key, value)
     return true
   })

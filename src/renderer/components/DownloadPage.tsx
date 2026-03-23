@@ -8,20 +8,19 @@ import TimeRangeSelector from './TimeRangeSelector'
 import DownloadProgress from './DownloadProgress'
 
 function DownloadPage() {
-  const {
-    url,
-    videoInfo,
-    isLoadingInfo,
-    mode,
-    videoFormat,
-    audioFormat,
-    quality,
-    startTime,
-    endTime,
-    currentDownload
-  } = useDownloadStore()
+  const url = useDownloadStore((s) => s.url)
+  const videoInfo = useDownloadStore((s) => s.videoInfo)
+  const isLoadingInfo = useDownloadStore((s) => s.isLoadingInfo)
+  const mode = useDownloadStore((s) => s.mode)
+  const videoFormat = useDownloadStore((s) => s.videoFormat)
+  const audioFormat = useDownloadStore((s) => s.audioFormat)
+  const quality = useDownloadStore((s) => s.quality)
+  const startTime = useDownloadStore((s) => s.startTime)
+  const endTime = useDownloadStore((s) => s.endTime)
+  // Only subscribe to presence/absence of download, not every progress tick
+  const isDownloading = useDownloadStore((s) => s.currentDownload !== null)
 
-  const { outputDirectory } = useSettingsStore()
+  const outputDirectory = useSettingsStore((s) => s.outputDirectory)
 
   const handleDownload = async () => {
     if (!videoInfo) return
@@ -32,7 +31,7 @@ function DownloadPage() {
         outputDir: outputDirectory,
         mode,
         videoFormat: mode === 'video' ? videoFormat : undefined,
-        audioFormat: mode === 'audio' ? audioFormat : audioFormat,
+        audioFormat: mode === 'audio' ? audioFormat : undefined,
         quality: mode === 'video' ? quality : undefined,
         startTime: startTime || undefined,
         endTime: endTime || undefined
@@ -47,7 +46,6 @@ function DownloadPage() {
     useSettingsStore.getState().loadSettings()
   }
 
-  const isDownloading = currentDownload !== null
   const canDownload = videoInfo && !isDownloading && !isLoadingInfo
 
   return (
@@ -82,7 +80,7 @@ function DownloadPage() {
             </div>
           </div>
 
-          {currentDownload && <DownloadProgress />}
+          {isDownloading && <DownloadProgress />}
 
           <button
             onClick={handleDownload}

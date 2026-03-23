@@ -21,7 +21,14 @@ function App() {
   const addToHistory = useDownloadStore((state) => state.addToHistory)
 
   useEffect(() => {
-    loadSettings()
+    // Load settings and hydrate download store with user's saved defaults
+    loadSettings().then(() => {
+      const settings = useSettingsStore.getState()
+      const downloadState = useDownloadStore.getState()
+      downloadState.setVideoFormat(settings.defaultVideoFormat)
+      downloadState.setAudioFormat(settings.defaultAudioFormat)
+      downloadState.setQuality(settings.defaultQuality)
+    })
 
     // Check initial backend status
     window.electron.getPythonStatus().then((ready) => {

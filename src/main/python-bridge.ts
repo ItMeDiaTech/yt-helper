@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { randomBytes } from 'crypto'
 import { spawn, ChildProcess } from 'child_process'
 import { join } from 'path'
 import { existsSync, statSync } from 'fs'
@@ -10,6 +11,9 @@ import { VideoInfo, DownloadOptions, DownloadProgress } from '../shared/types'
 // Minimum expected size for the bundled executable (in bytes)
 const MIN_EXE_SIZE = 10 * 1024 * 1024 // 10 MB
 const POLL_INTERVAL = 500 // Poll every 500ms
+const HEARTBEAT_INTERVAL = 15000 // Check health every 15s when idle
+const DEFAULT_TIMEOUT = 30000 // 30s default request timeout
+const VIDEO_INFO_TIMEOUT = 60000 // 60s for video info (yt-dlp can be slow)
 
 export class PythonBridge extends EventEmitter {
   private process: ChildProcess | null = null
@@ -22,7 +26,9 @@ export class PythonBridge extends EventEmitter {
   private lastError: string = ''
   private outputBuffer: string[] = []
   private pollInterval: NodeJS.Timeout | null = null
+  private heartbeatInterval: NodeJS.Timeout | null = null
   private activeDownloads: Set<string> = new Set()
+  private apiToken: string = ''
 
   async start(): Promise<void> {
     if (this.starting || this.ready) {
@@ -33,6 +39,9 @@ export class PythonBridge extends EventEmitter {
     this.starting = true
     this.shouldRestart = true
     this.outputBuffer = []
+
+    // Generate API token for this session
+    this.apiToken = randomBytes(32).toString('hex')
 
     try {
       this.port = await this.findAvailablePort()
@@ -58,9 +67,30 @@ export class PythonBridge extends EventEmitter {
         log.info(`Executable size: ${(stats.size / 1024 / 1024).toFixed(1)} MB`)
       }
 
+      // Build a minimal environment for the child process
+      const safeEnv: Record<string, string> = {
+        PATH: process.env.PATH || '',
+        PYTHONUNBUFFERED: '1',
+        YT_HELPER_API_TOKEN: this.apiToken,
+        ...env
+      }
+
+      // Include platform-specific required env vars
+      if (process.platform === 'win32') {
+        if (process.env.SystemRoot) safeEnv.SystemRoot = process.env.SystemRoot
+        if (process.env.APPDATA) safeEnv.APPDATA = process.env.APPDATA
+        if (process.env.LOCALAPPDATA) safeEnv.LOCALAPPDATA = process.env.LOCALAPPDATA
+        if (process.env.TEMP) safeEnv.TEMP = process.env.TEMP
+        if (process.env.TMP) safeEnv.TMP = process.env.TMP
+        if (process.env.USERPROFILE) safeEnv.USERPROFILE = process.env.USERPROFILE
+      } else {
+        if (process.env.HOME) safeEnv.HOME = process.env.HOME
+        if (process.env.TMPDIR) safeEnv.TMPDIR = process.env.TMPDIR
+      }
+
       this.process = spawn(pythonPath, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...env, PYTHONUNBUFFERED: '1' },
+        env: safeEnv,
         windowsHide: true
       })
 
@@ -91,6 +121,7 @@ export class PythonBridge extends EventEmitter {
         this.lastError = error.message
         this.ready = false
         this.starting = false
+        this.stopHeartbeat()
         this.emit('status', {
           ready: false,
           error: `Failed to start backend: ${error.message}`
@@ -109,6 +140,7 @@ export class PythonBridge extends EventEmitter {
         this.ready = false
         this.starting = false
         this.stopPolling()
+        this.stopHeartbeat()
 
         // Auto-restart with exponential backoff
         if (this.shouldRestart && code !== 0 && code !== null) {
@@ -140,6 +172,7 @@ export class PythonBridge extends EventEmitter {
       this.ready = true
       this.starting = false
       this.retryCount = 0 // Reset retry count on success
+      this.startHeartbeat()
       this.emit('status', { ready: true })
       log.info('Python backend started successfully')
     } catch (error) {
@@ -165,13 +198,17 @@ export class PythonBridge extends EventEmitter {
     this.retryCount = 0
 
     this.stopPolling()
+    this.stopHeartbeat()
 
     // Cancel any active downloads via API
     for (const downloadId of this.activeDownloads) {
       try {
         await fetch(`http://127.0.0.1:${this.port}/api/download/cancel`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Token': this.apiToken
+          },
           body: JSON.stringify({ downloadId })
         })
       } catch {
@@ -237,7 +274,16 @@ export class PythonBridge extends EventEmitter {
       if (!this.ready || this.activeDownloads.size === 0) return
 
       try {
-        const response = await fetch(`http://127.0.0.1:${this.port}/api/download/progress`)
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5000)
+
+        const response = await fetch(`http://127.0.0.1:${this.port}/api/download/progress`, {
+          signal: controller.signal,
+          headers: { 'X-API-Token': this.apiToken }
+        })
+
+        clearTimeout(timeout)
+
         if (response.ok) {
           const progressList = (await response.json()) as DownloadProgress[]
 
@@ -258,6 +304,11 @@ export class PythonBridge extends EventEmitter {
               this.emit('progress', progress)
             }
           }
+
+          // Stop polling when no downloads remain
+          if (this.activeDownloads.size === 0) {
+            this.stopPolling()
+          }
         }
       } catch (error) {
         log.error('Error polling progress:', error)
@@ -275,10 +326,64 @@ export class PythonBridge extends EventEmitter {
     }
   }
 
+  private startHeartbeat(): void {
+    if (this.heartbeatInterval) return
+
+    this.heartbeatInterval = setInterval(async () => {
+      if (!this.ready) return
+      // Skip heartbeat if polling is active (polls serve as implicit heartbeat)
+      if (this.activeDownloads.size > 0) return
+
+      try {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5000)
+
+        const response = await fetch(`http://127.0.0.1:${this.port}/api/health`, {
+          signal: controller.signal
+        })
+
+        clearTimeout(timeout)
+
+        if (!response.ok) {
+          throw new Error(`Health check returned ${response.status}`)
+        }
+      } catch (error) {
+        log.error('Heartbeat failed:', error)
+        this.ready = false
+        this.stopHeartbeat()
+        this.emit('status', {
+          ready: false,
+          error: 'Backend became unresponsive. Attempting restart...'
+        })
+        // Kill the unresponsive process before restarting
+        if (this.process && !this.process.killed) {
+          log.warn('Killing unresponsive Python process before restart')
+          this.process.kill('SIGKILL')
+          this.process = null
+        }
+        // Trigger restart
+        if (this.shouldRestart && this.retryCount < this.maxRetries) {
+          this.retryCount++
+          setTimeout(() => this.start(), 2000)
+        }
+      }
+    }, HEARTBEAT_INTERVAL)
+
+    log.info('Started heartbeat monitoring')
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+      this.heartbeatInterval = null
+    }
+  }
+
   private async clearDownload(downloadId: string): Promise<void> {
     try {
       await fetch(`http://127.0.0.1:${this.port}/api/download/clear/${downloadId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: { 'X-API-Token': this.apiToken }
       })
     } catch {
       // Ignore errors
@@ -392,33 +497,74 @@ export class PythonBridge extends EventEmitter {
     throw new Error(`Python server failed to start after ${maxAttempts * intervalMs}ms`)
   }
 
-  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  private async request<T>(
+    endpoint: string,
+    options?: RequestInit & { timeoutMs?: number }
+  ): Promise<T> {
     if (!this.ready) {
       throw new Error('Python server is not ready')
     }
 
-    const url = `http://127.0.0.1:${this.port}${endpoint}`
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      const url = `http://127.0.0.1:${this.port}${endpoint}`
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Token': this.apiToken,
+          ...options?.headers
+        }
+      })
+
+      let data: Record<string, unknown>
+      try {
+        data = await response.json()
+      } catch {
+        throw new Error(`Backend returned an invalid response (HTTP ${response.status})`)
       }
-    })
 
-    const data = await response.json()
+      if (!response.ok) {
+        throw new Error(
+          (data.error as string) ||
+            (data.message as string) ||
+            `Request failed with status ${response.status}`
+        )
+      }
 
-    if (!response.ok) {
-      throw new Error(data.error || data.message || `Request failed with status ${response.status}`)
+      return data as T
+    } catch (err) {
+      // Handle abort (timeout)
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new Error(
+          `Request to ${endpoint} timed out after ${timeoutMs / 1000}s. The backend may be overloaded.`
+        )
+      }
+      // Handle connection refused (backend crashed)
+      if (err instanceof TypeError && String(err.message).includes('fetch')) {
+        this.ready = false
+        this.stopHeartbeat()
+        this.emit('status', {
+          ready: false,
+          error: 'Lost connection to backend. It may have crashed.'
+        })
+        throw new Error('Lost connection to backend. It may have crashed.')
+      }
+      throw err
+    } finally {
+      clearTimeout(timeout)
     }
-
-    return data as T
   }
 
   async getVideoInfo(url: string): Promise<VideoInfo> {
     return this.request<VideoInfo>('/api/video/info', {
       method: 'POST',
-      body: JSON.stringify({ url })
+      body: JSON.stringify({ url }),
+      timeoutMs: VIDEO_INFO_TIMEOUT
     })
   }
 

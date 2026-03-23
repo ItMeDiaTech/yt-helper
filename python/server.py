@@ -7,6 +7,7 @@ Flask server with HTTP polling for download progress.
 import argparse
 import uuid
 import threading
+import time
 import sys
 import os
 import subprocess
@@ -15,11 +16,34 @@ from flask_cors import CORS
 from downloader import YouTubeDownloader
 
 app = Flask(__name__)
-CORS(app)
+
+# Restrict CORS to localhost origins only (Vite dev server)
+CORS(app, origins=['http://localhost:*', 'http://127.0.0.1:*'])
+
+# API token for authentication (set via environment variable at spawn time)
+API_TOKEN = os.environ.get('YT_HELPER_API_TOKEN', '')
 
 downloader = YouTubeDownloader()
-active_downloads = {}
-download_progress = {}
+
+# Thread-safe download state management
+_lock = threading.Lock()
+_active_downloads = {}
+_download_progress = {}
+
+# Maximum age for completed download entries (seconds)
+_PROGRESS_TTL = 300
+
+
+@app.before_request
+def verify_token():
+    """Verify API token on all requests except health check."""
+    if request.endpoint == 'health_check':
+        return
+    if not API_TOKEN:
+        return  # No token configured, skip auth (dev mode)
+    token = request.headers.get('X-API-Token', '')
+    if token != API_TOKEN:
+        return jsonify({'error': 'Unauthorized'}), 401
 
 
 @app.route('/api/health', methods=['GET'])
@@ -35,13 +59,20 @@ def get_video_info():
     url = data.get('url')
 
     if not url:
-        return jsonify({'error': 'URL is required'}), 400
+        return jsonify({'error': 'URL is required', 'errorType': 'validation'}), 400
 
     try:
         info = downloader.get_video_info(url)
         return jsonify(info)
+    except ValueError as e:
+        return jsonify({'error': str(e), 'errorType': 'validation'}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        error_msg = str(e)
+        # Try to extract a useful message from yt-dlp errors
+        if 'DownloadError' in type(e).__name__ or 'ExtractorError' in type(e).__name__:
+            return jsonify({'error': error_msg, 'errorType': 'yt_dlp'}), 422
+        app.logger.exception('Unexpected error in get_video_info')
+        return jsonify({'error': error_msg, 'errorType': 'internal'}), 500
 
 
 @app.route('/api/download/start', methods=['POST'])
@@ -59,29 +90,44 @@ def start_download():
     end_time = data.get('endTime')
 
     if not url or not output_dir:
-        return jsonify({'error': 'URL and outputDir are required'}), 400
+        return jsonify({'error': 'URL and outputDir are required', 'errorType': 'validation'}), 400
+
+    # Validate output directory
+    normalized_dir = os.path.normpath(os.path.abspath(output_dir))
+    if not os.path.isdir(normalized_dir):
+        return jsonify({'error': f'Output directory does not exist: {output_dir}', 'errorType': 'validation'}), 400
+    output_dir = normalized_dir
 
     download_id = str(uuid.uuid4())
 
-    # Initialize progress tracking
-    download_progress[download_id] = {
-        'downloadId': download_id,
-        'status': 'downloading',
-        'progress': 0,
-        'speed': None,
-        'eta': None,
-        'filename': None,
-        'error': None
-    }
+    # Initialize progress tracking (thread-safe)
+    with _lock:
+        _download_progress[download_id] = {
+            'downloadId': download_id,
+            'status': 'downloading',
+            'progress': 0,
+            'speed': None,
+            'eta': None,
+            'filename': None,
+            'error': None,
+            '_created_at': time.time()
+        }
 
     def progress_callback(data):
         """Update progress in the shared dict."""
-        download_progress[download_id].update(data)
-        download_progress[download_id]['downloadId'] = download_id
+        with _lock:
+            if download_id in _download_progress:
+                _download_progress[download_id].update(data)
+                _download_progress[download_id]['downloadId'] = download_id
 
     def download_thread():
         try:
-            active_downloads[download_id] = {'status': 'downloading', 'cancel': False}
+            with _lock:
+                _active_downloads[download_id] = {'status': 'downloading', 'cancel': False}
+
+            def cancel_check():
+                with _lock:
+                    return _active_downloads.get(download_id, {}).get('cancel', False)
 
             result = downloader.download(
                 url=url,
@@ -93,29 +139,31 @@ def start_download():
                 start_time=start_time,
                 end_time=end_time,
                 progress_callback=progress_callback,
-                cancel_check=lambda: active_downloads.get(download_id, {}).get('cancel', False)
+                cancel_check=cancel_check
             )
 
-            if active_downloads.get(download_id, {}).get('cancel'):
-                download_progress[download_id].update({
-                    'status': 'cancelled',
-                    'progress': 0
-                })
-            else:
-                download_progress[download_id].update({
-                    'status': 'complete',
-                    'progress': 100,
-                    'filename': result.get('filename')
-                })
+            with _lock:
+                if _active_downloads.get(download_id, {}).get('cancel'):
+                    _download_progress[download_id].update({
+                        'status': 'cancelled',
+                        'progress': 0
+                    })
+                else:
+                    _download_progress[download_id].update({
+                        'status': 'complete',
+                        'progress': 100,
+                        'filename': result.get('filename')
+                    })
         except Exception as e:
-            download_progress[download_id].update({
-                'status': 'error',
-                'progress': 0,
-                'error': str(e)
-            })
+            with _lock:
+                _download_progress[download_id].update({
+                    'status': 'error',
+                    'progress': 0,
+                    'error': str(e)
+                })
         finally:
-            if download_id in active_downloads:
-                del active_downloads[download_id]
+            with _lock:
+                _active_downloads.pop(download_id, None)
 
     thread = threading.Thread(target=download_thread)
     thread.daemon = True
@@ -127,14 +175,32 @@ def start_download():
 @app.route('/api/download/progress', methods=['GET'])
 def get_download_progress():
     """Get progress for all active downloads."""
-    return jsonify(list(download_progress.values()))
+    with _lock:
+        # Clean up stale completed entries
+        now = time.time()
+        stale_ids = [
+            did for did, p in _download_progress.items()
+            if p.get('status') in ('complete', 'error', 'cancelled')
+            and now - p.get('_created_at', 0) > _PROGRESS_TTL
+        ]
+        for did in stale_ids:
+            del _download_progress[did]
+
+        # Return copies without internal fields
+        result = []
+        for p in _download_progress.values():
+            entry = {k: v for k, v in p.items() if not k.startswith('_')}
+            result.append(entry)
+        return jsonify(result)
 
 
 @app.route('/api/download/progress/<download_id>', methods=['GET'])
 def get_single_download_progress(download_id):
     """Get progress for a specific download."""
-    if download_id in download_progress:
-        return jsonify(download_progress[download_id])
+    with _lock:
+        if download_id in _download_progress:
+            entry = {k: v for k, v in _download_progress[download_id].items() if not k.startswith('_')}
+            return jsonify(entry)
     return jsonify({'error': 'Download not found'}), 404
 
 
@@ -147,9 +213,10 @@ def cancel_download():
     if not download_id:
         return jsonify({'error': 'downloadId is required'}), 400
 
-    if download_id in active_downloads:
-        active_downloads[download_id]['cancel'] = True
-        return jsonify({'status': 'cancelling'})
+    with _lock:
+        if download_id in _active_downloads:
+            _active_downloads[download_id]['cancel'] = True
+            return jsonify({'status': 'cancelling'})
 
     return jsonify({'error': 'Download not found'}), 404
 
@@ -157,9 +224,10 @@ def cancel_download():
 @app.route('/api/download/clear/<download_id>', methods=['DELETE'])
 def clear_download(download_id):
     """Clear a completed download from progress tracking."""
-    if download_id in download_progress:
-        del download_progress[download_id]
-        return jsonify({'status': 'cleared'})
+    with _lock:
+        if download_id in _download_progress:
+            del _download_progress[download_id]
+            return jsonify({'status': 'cleared'})
     return jsonify({'error': 'Download not found'}), 404
 
 
@@ -197,6 +265,7 @@ def print_diagnostics():
     print(f'Executable: {sys.executable}')
     print(f'Working directory: {os.getcwd()}')
     print(f'Frozen (bundled): {getattr(sys, "frozen", False)}')
+    print(f'API auth: {"enabled" if API_TOKEN else "disabled"}')
 
     # Check ffmpeg
     try:

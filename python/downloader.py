@@ -25,9 +25,9 @@ class YouTubeDownloader:
     def validate_url(self, url: str) -> bool:
         """Validate if URL is a valid YouTube URL."""
         patterns = [
-            r'^(https?://)?(www\.)?youtube\.com/watch\?v=[\w-]+',
-            r'^(https?://)?(www\.)?youtu\.be/[\w-]+',
-            r'^(https?://)?(www\.)?youtube\.com/shorts/[\w-]+',
+            r'^(https?://)?(www\.)?youtube\.com/watch\?v=[\w-]+(&[\w=%+-]*)*$',
+            r'^(https?://)?(www\.)?youtu\.be/[\w-]+(\?[\w=&+-]*)?$',
+            r'^(https?://)?(www\.)?youtube\.com/shorts/[\w-]+(\?[\w=&+-]*)?$',
         ]
         return any(re.match(pattern, url) for pattern in patterns)
 
@@ -38,12 +38,20 @@ class YouTubeDownloader:
 
         ydl_opts = {
             'quiet': True,
-            'no_warnings': True,
+            'no_warnings': False,
             'extract_flat': False,
+            'socket_timeout': 30,
+            'retries': 3,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+
+            if info is None:
+                raise ValueError(
+                    'Could not retrieve video information. '
+                    'The video may be private, deleted, age-restricted, or geo-blocked.'
+                )
 
             # Get available qualities
             available_qualities = set()
@@ -140,12 +148,25 @@ class YouTubeDownloader:
                 })
 
         # Build yt-dlp options
+        import os
         ydl_opts = {
             'outtmpl': f'{output_dir}/%(title)s.%(ext)s',
             'progress_hooks': [progress_hook],
             'quiet': True,
             'no_warnings': True,
+            'socket_timeout': 30,
+            'retries': 3,
+            'restrictfilenames': True,
         }
+
+        # Capture the final filename after all postprocessors run
+        def postprocessor_hook(d):
+            if d['status'] == 'finished':
+                filepath = d.get('info_dict', {}).get('filepath', '')
+                if filepath:
+                    result['filename'] = filepath
+
+        ydl_opts['postprocessor_hooks'] = [postprocessor_hook]
 
         if mode == 'audio':
             # Audio only extraction
@@ -160,9 +181,32 @@ class YouTubeDownloader:
             format_spec = self.quality_map.get(quality, self.quality_map['best'])
             ydl_opts['format'] = format_spec
             ydl_opts['merge_output_format'] = video_format
+            # Ensure output is always in the requested container format,
+            # even when no merge occurs (single-stream fallback)
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegVideoRemuxer',
+                'preferedformat': video_format,
+            }]
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+
+        # If postprocessor_hook didn't fire, try to find the output file
+        if not result.get('filename') or not os.path.exists(result.get('filename', '')):
+            # Search for the file in the output directory using a fresh extractor
+            try:
+                with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl2:
+                    info = ydl2.extract_info(url, download=False)
+                    if info:
+                        title = yt_dlp.utils.sanitize_filename(
+                            info.get('title', 'video'), restricted=True
+                        )
+                        expected_ext = audio_format if mode == 'audio' else video_format
+                        candidate = os.path.join(output_dir, f'{title}.{expected_ext}')
+                        if os.path.exists(candidate):
+                            result['filename'] = candidate
+            except Exception:
+                pass  # Best-effort fallback; download itself succeeded
 
         # Trim if time range specified
         if (start_time or end_time) and result.get('filename'):
@@ -193,6 +237,26 @@ class YouTubeDownloader:
         else:
             return float(parts[0])
 
+    def _validate_time_input(self, time_str: str) -> bool:
+        """Validate time string format for safe use with FFmpeg."""
+        if not time_str:
+            return True
+        pattern = r'^\d{1,2}(:\d{2}){0,2}(\.\d+)?$'
+        if not re.match(pattern, time_str):
+            return False
+        parts = time_str.split(':')
+        try:
+            values = [float(p) for p in parts]
+            if any(v < 0 for v in values):
+                return False
+            if len(parts) >= 2 and values[-1] >= 60:
+                return False
+            if len(parts) == 3 and values[1] >= 60:
+                return False
+        except ValueError:
+            return False
+        return True
+
     def _trim_file(
         self,
         filepath: str,
@@ -203,6 +267,12 @@ class YouTubeDownloader:
         """Trim media file using FFmpeg."""
         import subprocess
         import os
+
+        # Validate time inputs server-side before passing to FFmpeg
+        if start_time and not self._validate_time_input(start_time):
+            raise ValueError(f'Invalid start time format: {start_time}')
+        if end_time and not self._validate_time_input(end_time):
+            raise ValueError(f'Invalid end time format: {end_time}')
 
         if not os.path.exists(filepath):
             # Try to find the actual output file (yt-dlp may have changed extension)
@@ -224,13 +294,23 @@ class YouTubeDownloader:
             })
 
         # Build ffmpeg command
+        # Place -ss before -i for fast input seeking, use -t (duration) instead of -to
         temp_output = filepath + '.trimmed.tmp'
-        cmd = ['ffmpeg', '-y', '-i', filepath]
+        cmd = ['ffmpeg', '-y']
 
         if start_time:
             cmd.extend(['-ss', start_time])
+
+        cmd.extend(['-i', filepath])
+
         if end_time:
-            cmd.extend(['-to', end_time])
+            if start_time:
+                # Calculate duration from start to end
+                duration = self._time_to_seconds(end_time) - self._time_to_seconds(start_time)
+                if duration > 0:
+                    cmd.extend(['-t', str(duration)])
+            else:
+                cmd.extend(['-to', end_time])
 
         # Use copy mode for fast trimming (no re-encoding)
         cmd.extend(['-c', 'copy', temp_output])

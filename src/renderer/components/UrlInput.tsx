@@ -8,26 +8,27 @@ function UrlInput() {
 
   const isValidUrl = (url: string): boolean => {
     const patterns = [
-      /^(https?:\/\/)?(www\.)?youtube\.com\/watch\?v=[\w-]+/,
-      /^(https?:\/\/)?(www\.)?youtu\.be\/[\w-]+/,
-      /^(https?:\/\/)?(www\.)?youtube\.com\/shorts\/[\w-]+/
+      /^(https?:\/\/)?(www\.)?youtube\.com\/watch\?v=[\w-]+(&[\w=%+-]*)*$/,
+      /^(https?:\/\/)?(www\.)?youtu\.be\/[\w-]+(\?[\w=&+-]*)?$/,
+      /^(https?:\/\/)?(www\.)?youtube\.com\/shorts\/[\w-]+(\?[\w=&+-]*)?$/
     ]
     return patterns.some((pattern) => pattern.test(url))
   }
 
-  const handleSubmit = async () => {
-    if (!inputValue.trim() || !isValidUrl(inputValue)) {
+  const handleSubmit = async (urlOverride?: string) => {
+    const targetUrl = urlOverride ?? inputValue
+    if (!targetUrl.trim() || !isValidUrl(targetUrl)) {
       setInfoError('Please enter a valid YouTube URL')
       return
     }
 
-    setUrl(inputValue)
+    setUrl(targetUrl)
     setLoadingInfo(true)
     setInfoError(null)
     setVideoInfo(null)
 
     try {
-      const info = await window.electron.getVideoInfo(inputValue)
+      const info = await window.electron.getVideoInfo(targetUrl)
       setVideoInfo(info)
     } catch (error) {
       setInfoError(error instanceof Error ? error.message : 'Failed to fetch video info')
@@ -47,8 +48,7 @@ function UrlInput() {
       const text = await navigator.clipboard.readText()
       setInputValue(text)
       if (isValidUrl(text)) {
-        setUrl(text)
-        handleSubmit()
+        handleSubmit(text)
       }
     } catch {
       // Clipboard access denied
@@ -75,7 +75,7 @@ function UrlInput() {
           Paste
         </button>
         <button
-          onClick={handleSubmit}
+          onClick={() => handleSubmit()}
           disabled={isLoadingInfo || !inputValue.trim()}
           className={`px-6 py-2 rounded-lg font-medium transition-colors ${
             isLoadingInfo || !inputValue.trim()
