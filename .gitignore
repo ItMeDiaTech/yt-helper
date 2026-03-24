@@ -15,6 +15,9 @@ python/*.spec
 # IDE
 .vscode/
 .idea/
+
+# AI tooling
+.claude/
 *.swp
 *.swo
 
