@@ -559,11 +559,22 @@ export class PythonBridge extends EventEmitter {
       if (err instanceof TypeError && String(err.message).includes('fetch')) {
         this.ready = false
         this.stopHeartbeat()
+        // Kill the unreachable process and trigger restart
+        if (this.process && !this.process.killed) {
+          log.warn('Killing unreachable Python process before restart')
+          this.process.kill('SIGKILL')
+          this.process = null
+        }
+        if (this.shouldRestart && this.retryCount < this.maxRetries) {
+          this.retryCount++
+          log.info(`Connection lost, attempting restart ${this.retryCount}/${this.maxRetries}...`)
+          setTimeout(() => this.start(), 2000)
+        }
         this.emit('status', {
           ready: false,
-          error: 'Lost connection to backend. It may have crashed.'
+          error: 'Lost connection to backend. Attempting restart...'
         })
-        throw new Error('Lost connection to backend. It may have crashed.')
+        throw new Error('Lost connection to backend. Attempting restart...')
       }
       throw err
     } finally {

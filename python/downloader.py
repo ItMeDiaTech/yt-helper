@@ -42,6 +42,7 @@ class YouTubeDownloader:
             'extract_flat': False,
             'socket_timeout': 30,
             'retries': 3,
+            'cachedir': False,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -157,6 +158,7 @@ class YouTubeDownloader:
             'socket_timeout': 30,
             'retries': 3,
             'restrictfilenames': True,
+            'cachedir': False,
         }
 
         # Capture the final filename after all postprocessors run
@@ -193,18 +195,18 @@ class YouTubeDownloader:
 
         # If postprocessor_hook didn't fire, try to find the output file
         if not result.get('filename') or not os.path.exists(result.get('filename', '')):
-            # Search for the file in the output directory using a fresh extractor
+            # Scan output directory for the most recently created file with the expected extension
+            expected_ext = audio_format if mode == 'audio' else video_format
             try:
-                with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl2:
-                    info = ydl2.extract_info(url, download=False)
-                    if info:
-                        title = yt_dlp.utils.sanitize_filename(
-                            info.get('title', 'video'), restricted=True
-                        )
-                        expected_ext = audio_format if mode == 'audio' else video_format
-                        candidate = os.path.join(output_dir, f'{title}.{expected_ext}')
-                        if os.path.exists(candidate):
-                            result['filename'] = candidate
+                candidates = [
+                    os.path.join(output_dir, f)
+                    for f in os.listdir(output_dir)
+                    if f.endswith(f'.{expected_ext}')
+                ]
+                if candidates:
+                    # Pick the most recently modified file
+                    best = max(candidates, key=os.path.getmtime)
+                    result['filename'] = best
             except Exception:
                 pass  # Best-effort fallback; download itself succeeded
 

@@ -65,11 +65,14 @@ def get_video_info():
         info = downloader.get_video_info(url)
         return jsonify(info)
     except ValueError as e:
+        app.logger.warning('Validation error in get_video_info: %s', e)
         return jsonify({'error': str(e), 'errorType': 'validation'}), 400
     except Exception as e:
         error_msg = str(e)
+        error_type = type(e).__name__
+        app.logger.error('get_video_info failed [%s]: %s', error_type, error_msg)
         # Try to extract a useful message from yt-dlp errors
-        if 'DownloadError' in type(e).__name__ or 'ExtractorError' in type(e).__name__:
+        if 'DownloadError' in error_type or 'ExtractorError' in error_type:
             return jsonify({'error': error_msg, 'errorType': 'yt_dlp'}), 422
         app.logger.exception('Unexpected error in get_video_info')
         return jsonify({'error': error_msg, 'errorType': 'internal'}), 500
