@@ -15,6 +15,8 @@ interface DownloadState {
   endTime: string
 
   currentDownload: DownloadProgress | null
+  downloadError: string | null
+  downloadSuccess: string | null
   downloadHistory: DownloadProgress[]
 
   setUrl: (url: string) => void
@@ -30,6 +32,8 @@ interface DownloadState {
   setEndTime: (time: string) => void
 
   setCurrentDownload: (download: DownloadProgress | null) => void
+  setDownloadError: (error: string | null) => void
+  setDownloadSuccess: (message: string | null) => void
   addToHistory: (download: DownloadProgress) => void
   clearHistory: () => void
 
@@ -48,6 +52,8 @@ const initialState = {
   startTime: '',
   endTime: '',
   currentDownload: null,
+  downloadError: null,
+  downloadSuccess: null,
   downloadHistory: []
 }
 
@@ -67,6 +73,8 @@ export const useDownloadStore = create<DownloadState>((set) => ({
   setEndTime: (endTime) => set({ endTime }),
 
   setCurrentDownload: (currentDownload) => set({ currentDownload }),
+  setDownloadError: (downloadError) => set({ downloadError }),
+  setDownloadSuccess: (downloadSuccess) => set({ downloadSuccess }),
   addToHistory: (download) =>
     set((state) => ({
       downloadHistory: [download, ...state.downloadHistory].slice(0, 50)

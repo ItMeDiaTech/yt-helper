@@ -20,6 +20,8 @@ function App() {
   const [backendStatus, setBackendStatus] = useState<BackendStatus>({ ready: false })
   const loadSettings = useSettingsStore((state) => state.loadSettings)
   const setCurrentDownload = useDownloadStore((state) => state.setCurrentDownload)
+  const setDownloadError = useDownloadStore((state) => state.setDownloadError)
+  const setDownloadSuccess = useDownloadStore((state) => state.setDownloadSuccess)
   const addToHistory = useDownloadStore((state) => state.addToHistory)
 
   useEffect(() => {
@@ -43,11 +45,13 @@ function App() {
 
     const unsubComplete = window.electron.onDownloadComplete((result) => {
       setCurrentDownload(null)
+      setDownloadSuccess(result.filename || null)
       addToHistory(result)
     })
 
     const unsubError = window.electron.onDownloadError((error) => {
       setCurrentDownload(null)
+      setDownloadError(error.error || 'Download failed')
       addToHistory(error)
     })
 
@@ -57,7 +61,7 @@ function App() {
       unsubComplete()
       unsubError()
     }
-  }, [loadSettings, setCurrentDownload, addToHistory])
+  }, [loadSettings, setCurrentDownload, setDownloadError, setDownloadSuccess, addToHistory])
 
   // Poll backend status until ready — catches missed IPC events
   useEffect(() => {

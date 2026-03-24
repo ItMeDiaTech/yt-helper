@@ -20,10 +20,18 @@ function DownloadPage() {
   // Only subscribe to presence/absence of download, not every progress tick
   const isDownloading = useDownloadStore((s) => s.currentDownload !== null)
 
+  const downloadError = useDownloadStore((s) => s.downloadError)
+  const setDownloadError = useDownloadStore((s) => s.setDownloadError)
+  const downloadSuccess = useDownloadStore((s) => s.downloadSuccess)
+  const setDownloadSuccess = useDownloadStore((s) => s.setDownloadSuccess)
+
   const outputDirectory = useSettingsStore((s) => s.outputDirectory)
 
   const handleDownload = async () => {
     if (!videoInfo) return
+
+    setDownloadError(null)
+    setDownloadSuccess(null)
 
     try {
       await window.electron.startDownload({
@@ -37,7 +45,8 @@ function DownloadPage() {
         endTime: endTime || undefined
       })
     } catch (error) {
-      console.error('Download failed:', error)
+      const message = error instanceof Error ? error.message : 'Download failed to start'
+      setDownloadError(message)
     }
   }
 
@@ -81,6 +90,18 @@ function DownloadPage() {
           </div>
 
           {isDownloading && <DownloadProgress />}
+
+          {downloadError && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+              <p className="text-red-400 text-sm">{downloadError}</p>
+            </div>
+          )}
+
+          {downloadSuccess && (
+            <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4">
+              <p className="text-green-400 text-sm">Saved to {downloadSuccess}</p>
+            </div>
+          )}
 
           <button
             onClick={handleDownload}
