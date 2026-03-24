@@ -22,6 +22,18 @@ class YouTubeDownloader:
             '360p': 'bestvideo[height<=360]+bestaudio/best[height<=360]',
         }
 
+        # H264+AAC preferring format specs with fallback chain:
+        # 1. H264 video + AAC audio  2. H264 video + any audio  3. any codecs
+        self.h264_quality_map = {
+            'best': 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[vcodec^=avc1]+bestaudio/bestvideo+bestaudio/best',
+            '2160p': 'bestvideo[height<=2160][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=2160][vcodec^=avc1]+bestaudio/bestvideo[height<=2160]+bestaudio/best[height<=2160]',
+            '1440p': 'bestvideo[height<=1440][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=1440][vcodec^=avc1]+bestaudio/bestvideo[height<=1440]+bestaudio/best[height<=1440]',
+            '1080p': 'bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=1080][vcodec^=avc1]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]',
+            '720p': 'bestvideo[height<=720][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=720][vcodec^=avc1]+bestaudio/bestvideo[height<=720]+bestaudio/best[height<=720]',
+            '480p': 'bestvideo[height<=480][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=480][vcodec^=avc1]+bestaudio/bestvideo[height<=480]+bestaudio/best[height<=480]',
+            '360p': 'bestvideo[height<=360][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=360][vcodec^=avc1]+bestaudio/bestvideo[height<=360]+bestaudio/best[height<=360]',
+        }
+
     def validate_url(self, url: str) -> bool:
         """Validate if URL is a valid YouTube URL."""
         patterns = [
@@ -89,6 +101,7 @@ class YouTubeDownloader:
         quality: str = 'best',
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        convert_to_h264: bool = False,
         progress_callback: Optional[Callable[[Dict], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
@@ -180,7 +193,11 @@ class YouTubeDownloader:
             }]
         else:
             # Video download
-            format_spec = self.quality_map.get(quality, self.quality_map['best'])
+            if convert_to_h264:
+                qmap = self.h264_quality_map
+            else:
+                qmap = self.quality_map
+            format_spec = qmap.get(quality, qmap['best'])
             ydl_opts['format'] = format_spec
             ydl_opts['merge_output_format'] = video_format
             # Ensure output is always in the requested container format,
@@ -221,6 +238,16 @@ class YouTubeDownloader:
                 )
             except Exception as e:
                 raise ValueError(f'Failed to trim video: {str(e)}')
+
+        # Convert to H264/AAC if requested
+        if convert_to_h264 and mode == 'video' and result.get('filename'):
+            try:
+                result['filename'] = self._check_and_convert_codecs(
+                    result['filename'],
+                    progress_callback
+                )
+            except Exception as e:
+                raise ValueError(f'Failed to convert to H264/AAC: {str(e)}')
 
         return result
 
@@ -331,3 +358,97 @@ class YouTubeDownloader:
                 os.remove(temp_output)
             stderr = e.stderr.decode() if e.stderr else 'Unknown error'
             raise RuntimeError(f'FFmpeg trimming failed: {stderr}')
+
+    def _check_and_convert_codecs(
+        self,
+        filepath: str,
+        progress_callback: Optional[Callable[[Dict], None]] = None
+    ) -> str:
+        """Check codecs via ffprobe and re-encode to H264/AAC if needed."""
+        import subprocess
+        import os
+        import json
+
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f'File not found for codec check: {filepath}')
+
+        # Probe codecs
+        probe_cmd = [
+            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            '-show_streams', filepath
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        if probe_result.returncode != 0:
+            raise RuntimeError(f'ffprobe failed: {probe_result.stderr}')
+
+        streams = json.loads(probe_result.stdout).get('streams', [])
+
+        video_codec = None
+        audio_codec = None
+        for stream in streams:
+            if stream.get('codec_type') == 'video' and video_codec is None:
+                video_codec = stream.get('codec_name', '')
+            elif stream.get('codec_type') == 'audio' and audio_codec is None:
+                audio_codec = stream.get('codec_name', '')
+
+        video_is_h264 = video_codec in ('h264', 'avc1')
+        audio_is_aac = audio_codec == 'aac'
+
+        if video_is_h264 and audio_is_aac:
+            return filepath
+
+        if progress_callback:
+            parts = []
+            if not video_is_h264:
+                parts.append(f'video {video_codec} \u2192 H264')
+            if not audio_is_aac:
+                parts.append(f'audio {audio_codec} \u2192 AAC')
+            progress_callback({
+                'status': 'converting',
+                'progress': 0,
+                'message': f'Converting: {", ".join(parts)}...'
+            })
+
+        # Build ffmpeg command — only re-encode streams that need it
+        ext = os.path.splitext(filepath)[1]
+        temp_output = filepath.rsplit('.', 1)[0] + '.h264convert' + ext
+
+        cmd = ['ffmpeg', '-y', '-i', filepath]
+        cmd.extend(['-c:v', 'copy' if video_is_h264 else 'libx264'])
+        cmd.extend(['-c:a', 'copy' if audio_is_aac else 'aac'])
+
+        if not video_is_h264:
+            cmd.extend(['-preset', 'medium', '-crf', '23'])
+        if not audio_is_aac:
+            cmd.extend(['-b:a', '192k'])
+
+        cmd.append(temp_output)
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            _, stderr = process.communicate()
+
+            if process.returncode != 0:
+                error_msg = stderr.decode() if stderr else 'Unknown error'
+                raise RuntimeError(f'FFmpeg conversion failed: {error_msg}')
+
+            # Replace original with converted
+            os.remove(filepath)
+            os.rename(temp_output, filepath)
+
+            if progress_callback:
+                progress_callback({
+                    'status': 'converting',
+                    'progress': 100,
+                    'message': 'Conversion complete'
+                })
+
+            return filepath
+        except Exception:
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            raise

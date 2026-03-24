@@ -17,6 +17,7 @@ function DownloadProgress() {
     pending: 'Preparing...',
     downloading: 'Downloading...',
     processing: 'Processing...',
+    converting: 'Converting to H264/AAC...',
     complete: 'Complete',
     error: 'Error',
     cancelled: 'Cancelled'
@@ -28,7 +29,7 @@ function DownloadProgress() {
         <span className="text-sm text-dark-400">
           {statusLabels[currentDownload.status] || currentDownload.status}
         </span>
-        {(currentDownload.status === 'downloading' || currentDownload.status === 'processing') && (
+        {(currentDownload.status === 'downloading' || currentDownload.status === 'processing' || currentDownload.status === 'converting') && (
           <button
             onClick={handleCancel}
             className="text-sm text-red-500 hover:text-red-400 transition-colors"
@@ -53,6 +54,10 @@ function DownloadProgress() {
           {currentDownload.eta && `ETA: ${currentDownload.eta}`}
         </span>
       </div>
+
+      {currentDownload.message && (
+        <p className="text-xs text-dark-400">{currentDownload.message}</p>
+      )}
 
       {currentDownload.filename && (
         <p className="text-xs text-dark-500 truncate" title={currentDownload.filename}>

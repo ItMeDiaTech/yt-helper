@@ -8,6 +8,7 @@ interface SettingsState extends Settings {
   setDefaultVideoFormat: (format: string) => Promise<void>
   setDefaultAudioFormat: (format: string) => Promise<void>
   setDefaultQuality: (quality: string) => Promise<void>
+  setDefaultConvertToH264: (value: boolean) => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsState>((set) => ({
@@ -15,6 +16,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   defaultVideoFormat: 'mp4',
   defaultAudioFormat: 'mp3',
   defaultQuality: 'best',
+  defaultConvertToH264: false,
   isLoading: true,
 
   loadSettings: async () => {
@@ -45,5 +47,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setDefaultQuality: async (quality) => {
     await window.electron.setSetting('defaultQuality', quality)
     set({ defaultQuality: quality })
+  },
+
+  setDefaultConvertToH264: async (value) => {
+    await window.electron.setSetting('defaultConvertToH264', value)
+    set({ defaultConvertToH264: value })
   }
 }))

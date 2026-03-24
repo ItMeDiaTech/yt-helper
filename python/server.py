@@ -91,6 +91,7 @@ def start_download():
     quality = data.get('quality', 'best')
     start_time = data.get('startTime')
     end_time = data.get('endTime')
+    convert_to_h264 = data.get('convertToH264', False)
 
     if not url or not output_dir:
         return jsonify({'error': 'URL and outputDir are required', 'errorType': 'validation'}), 400
@@ -141,6 +142,7 @@ def start_download():
                 quality=quality,
                 start_time=start_time,
                 end_time=end_time,
+                convert_to_h264=convert_to_h264,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check
             )

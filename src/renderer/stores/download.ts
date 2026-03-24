@@ -13,6 +13,7 @@ interface DownloadState {
   quality: string
   startTime: string
   endTime: string
+  convertToH264: boolean
 
   currentDownload: DownloadProgress | null
   downloadError: string | null
@@ -30,6 +31,7 @@ interface DownloadState {
   setQuality: (quality: string) => void
   setStartTime: (time: string) => void
   setEndTime: (time: string) => void
+  setConvertToH264: (value: boolean) => void
 
   setCurrentDownload: (download: DownloadProgress | null) => void
   setDownloadError: (error: string | null) => void
@@ -51,6 +53,7 @@ const initialState = {
   quality: 'best',
   startTime: '',
   endTime: '',
+  convertToH264: false,
   currentDownload: null,
   downloadError: null,
   downloadSuccess: null,
@@ -71,6 +74,7 @@ export const useDownloadStore = create<DownloadState>((set) => ({
   setQuality: (quality) => set({ quality }),
   setStartTime: (startTime) => set({ startTime }),
   setEndTime: (endTime) => set({ endTime }),
+  setConvertToH264: (convertToH264) => set({ convertToH264 }),
 
   setCurrentDownload: (currentDownload) => set({ currentDownload }),
   setDownloadError: (downloadError) => set({ downloadError }),

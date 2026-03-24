@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useDownloadStore } from '../stores/download'
 import { useSettingsStore } from '../stores/settings'
 import UrlInput from './UrlInput'
@@ -17,6 +18,8 @@ function DownloadPage() {
   const quality = useDownloadStore((s) => s.quality)
   const startTime = useDownloadStore((s) => s.startTime)
   const endTime = useDownloadStore((s) => s.endTime)
+  const convertToH264 = useDownloadStore((s) => s.convertToH264)
+  const setConvertToH264 = useDownloadStore((s) => s.setConvertToH264)
   // Only subscribe to presence/absence of download, not every progress tick
   const isDownloading = useDownloadStore((s) => s.currentDownload !== null)
 
@@ -26,6 +29,11 @@ function DownloadPage() {
   const setDownloadSuccess = useDownloadStore((s) => s.setDownloadSuccess)
 
   const outputDirectory = useSettingsStore((s) => s.outputDirectory)
+  const defaultConvertToH264 = useSettingsStore((s) => s.defaultConvertToH264)
+
+  useEffect(() => {
+    setConvertToH264(defaultConvertToH264)
+  }, [defaultConvertToH264, setConvertToH264])
 
   const handleDownload = async () => {
     if (!videoInfo) return
@@ -42,7 +50,8 @@ function DownloadPage() {
         audioFormat: mode === 'audio' ? audioFormat : undefined,
         quality: mode === 'video' ? quality : undefined,
         startTime: startTime || undefined,
-        endTime: endTime || undefined
+        endTime: endTime || undefined,
+        convertToH264: mode === 'video' ? convertToH264 : undefined
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Download failed to start'
@@ -69,6 +78,24 @@ function DownloadPage() {
         <div className="space-y-4 mt-6">
           <FormatSelector />
           {mode === 'video' && <QualitySelector />}
+          {mode === 'video' && (
+            <div className="bg-dark-800 rounded-lg p-4">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={convertToH264}
+                  onChange={(e) => setConvertToH264(e.target.checked)}
+                  className="w-4 h-4 rounded border-dark-600 bg-dark-700 text-primary-600 focus:ring-primary-500"
+                />
+                <div>
+                  <span className="text-sm text-dark-200">Convert to H264/AAC</span>
+                  <p className="text-xs text-dark-500 mt-0.5">
+                    Ensures maximum compatibility. May re-encode if native H264 is unavailable.
+                  </p>
+                </div>
+              </label>
+            </div>
+          )}
           <TimeRangeSelector />
 
           <div className="bg-dark-800 rounded-lg p-4">

@@ -16,7 +16,8 @@ const store = new Store({
     outputDirectory: app.getPath('downloads'),
     defaultVideoFormat: 'mp4',
     defaultAudioFormat: 'mp3',
-    defaultQuality: 'best'
+    defaultQuality: 'best',
+    defaultConvertToH264: false
   }
 })
 
@@ -96,7 +97,7 @@ function setupIpcHandlers(): void {
   })
 
   ipcMain.handle(IPC_CHANNELS.SET_SETTINGS, (_, key: string, value: unknown) => {
-    const ALLOWED_KEYS = ['outputDirectory', 'defaultVideoFormat', 'defaultAudioFormat', 'defaultQuality']
+    const ALLOWED_KEYS = ['outputDirectory', 'defaultVideoFormat', 'defaultAudioFormat', 'defaultQuality', 'defaultConvertToH264']
     if (!ALLOWED_KEYS.includes(key)) {
       throw new Error(`Invalid settings key: ${key}`)
     }

@@ -15,9 +15,11 @@ function SettingsPage() {
     defaultVideoFormat,
     defaultAudioFormat,
     defaultQuality,
+    defaultConvertToH264,
     setDefaultVideoFormat,
     setDefaultAudioFormat,
-    setDefaultQuality
+    setDefaultQuality,
+    setDefaultConvertToH264
   } = useSettingsStore()
 
   const [appVersion, setAppVersion] = useState<string>('')
@@ -187,6 +189,23 @@ function SettingsPage() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="bg-dark-800 rounded-lg p-4">
+          <label className="flex items-center justify-between cursor-pointer">
+            <div>
+              <span className="text-sm text-dark-200">Default: Convert to H264/AAC</span>
+              <p className="text-xs text-dark-500 mt-0.5">
+                When enabled, new downloads will default to H264 video + AAC audio
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={defaultConvertToH264}
+              onChange={(e) => setDefaultConvertToH264(e.target.checked)}
+              className="w-4 h-4 rounded border-dark-600 bg-dark-700 text-primary-600 focus:ring-primary-500"
+            />
+          </label>
         </div>
       </div>
     </div>

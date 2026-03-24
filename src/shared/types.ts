@@ -21,6 +21,7 @@ export interface DownloadOptions {
   quality?: string
   startTime?: string
   endTime?: string
+  convertToH264?: boolean
 }
 
 export interface DownloadProgress {
@@ -31,6 +32,7 @@ export interface DownloadProgress {
   eta?: string
   filename?: string
   error?: string
+  message?: string
 }
 
 export interface Settings {
@@ -38,6 +40,7 @@ export interface Settings {
   defaultVideoFormat: string
   defaultAudioFormat: string
   defaultQuality: string
+  defaultConvertToH264: boolean
 }
 
 export const IPC_CHANNELS = {
